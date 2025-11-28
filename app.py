@@ -1,32 +1,108 @@
-#as it is virtual environment, no libraries installed
 import streamlit as st
-import pandas as pd
-
 import pickle
-movies_dict=pickle.load(open('movies_dict.pkl','rb'))
-movies=pd.DataFrame(movies_dict) #create a data frame
+import pandas as pd
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-similarity=pickle.load(open('similarity.pkl','rb'))
+# ---------------------------------------------------------
+# BASIC PAGE CONFIG
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="Movie Recommender",
+    page_icon="🎬",
+    layout="centered"
+)
+
+st.title("🎬 Movie Recommendation System")
+st.write("Get movie recommendations based on what you like.")
 
 
-def recommend(movie):
-    movie_index = movies[movies['title'] == movie].index[0]
-    distances = similarity[movie_index]  # similarity matrix index
-    movies_list = sorted(list(enumerate(distances)), reverse=True, key=lambda x: x[1])[1:6]
+# ---------------------------------------------------------
+# LOAD DATA (movies)
+# ---------------------------------------------------------
+@st.cache_resource
+def load_movies():
+    """
+    Loads the movies dataframe from pickle.
+    Expects movies_dict.pkl with at least 'title' and 'tags' columns.
+    """
+    movies_dict = pickle.load(open('movies_dict.pkl', 'rb'))
+    movies = pd.DataFrame(movies_dict)
+    return movies
 
-    recommended=[]
+
+movies = load_movies()
+
+# Safety check – just in case
+required_cols = {"title", "tags"}
+if not required_cols.issubset(set(movies.columns)):
+    st.error(
+        f"Required columns {required_cols} not found in movies dataframe. "
+        f"Found columns: {list(movies.columns)}"
+    )
+    st.stop()
+
+
+# ---------------------------------------------------------
+# BUILD SIMILARITY MATRIX (NO similarity.pkl NEEDED)
+# ---------------------------------------------------------
+@st.cache_resource
+def build_similarity(movies_df: pd.DataFrame):
+    """
+    Builds cosine similarity matrix from the 'tags' column.
+    Cached so it's computed only once per server.
+    """
+    cv = CountVectorizer(max_features=5000, stop_words='english')
+    vectors = cv.fit_transform(movies_df['tags']).toarray()
+    similarity_matrix = cosine_similarity(vectors)
+    return similarity_matrix
+
+
+similarity = build_similarity(movies)
+
+
+# ---------------------------------------------------------
+#  RECOMMENDATION FUNCTION
+# ---------------------------------------------------------
+def recommend(movie_name: str, top_n: int = 5):
+    """
+    Given a movie title, returns top_n similar movie titles.
+    """
+    # Check if movie exists
+    if movie_name not in movies['title'].values:
+        return []
+
+    movie_index = movies[movies['title'] == movie_name].index[0]
+    distances = list(enumerate(similarity[movie_index]))
+    # Sort by similarity score (descending), skip the first (itself)
+    movies_list = sorted(distances, reverse=True, key=lambda x: x[1])[1: top_n+1]
+
+    recommended_movies = []
     for i in movies_list:
-        recommended.append(movies.iloc[i[0]].title)  # fetching the movie title from newdf dataframe
-    return recommended
+        recommended_movies.append(movies.iloc[i[0]].title)
+
+    return recommended_movies
 
 
-st.title('The Movie Recommender')
-select_movie_name=st.selectbox('what do you want to watch?',
-                   movies['title'].values)
+# ---------------------------------------------------------
+# STREAMLIT UI
+# ---------------------------------------------------------
+st.subheader("Select a movie to get recommendations")
 
-if st.button('Recommend'):
-    recommendation=recommend(select_movie_name)
-    for i in recommendation:
-        st.write(i)
+selected_movie_name = st.selectbox(
+    "Type or choose a movie:",
+    movies['title'].values
+)
+
+if st.button("Recommend 🎥"):
+    with st.spinner("Finding similar movies for you..."):
+        recommendations = recommend(selected_movie_name)
+
+    if not recommendations:
+        st.warning("No recommendations found. Please try another movie.")
+    else:
+        st.success("Here are some movies you might like:")
+        for idx, movie in enumerate(recommendations, start=1):
+            st.write(f"**{idx}.** {movie}")
 
 
